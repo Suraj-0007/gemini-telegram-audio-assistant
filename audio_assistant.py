@@ -8,8 +8,8 @@ Flow:
 1. User describes the audio they want.
 2. Gemini Flash-Lite prepares one or more short scripts.
 3. Bot shows the scripts and waits for confirmation/revision.
-4. Only after confirmation does Gemini TTS generate MP3 files.
-5. Bot sends the MP3 files back in Telegram.
+4. Only after confirmation does Gemini TTS generate audio.
+5. Bot wraps Gemini PCM output as WAV and sends the WAV files back in Telegram.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 import tempfile
+import wave
 import time
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
@@ -195,15 +196,15 @@ class TelegramAPI:
         except Exception:
             LOGGER.debug("sendChatAction failed", exc_info=True)
 
-    def send_audio(self, chat_id: int, path: Path, *, title: str, caption: str):
+    def send_document(self, chat_id: int, path: Path, *, caption: str):
+        """Send a general file. WAV is sent as a document because Telegram sendAudio requires MP3/M4A."""
         with path.open("rb") as handle:
-            files = {"audio": (path.name, handle, "audio/mpeg")}
+            files = {"document": (path.name, handle, "audio/wav")}
             data = {
                 "chat_id": str(chat_id),
-                "title": title[:64],
                 "caption": caption[:1024],
             }
-            return self._post("sendAudio", data=data, files=files, timeout=180)
+            return self._post("sendDocument", data=data, files=files, timeout=180)
 
 
 # -----------------------------------------------------------------------------
@@ -294,7 +295,8 @@ class GeminiAudioService:
         draft = AudioDraft.model_validate_json(interaction.output_text)
         return normalize_draft(draft)
 
-    def generate_mp3(self, clip: ClipDraft, output_path: Path) -> None:
+    def generate_wav(self, clip: ClipDraft, output_path: Path) -> None:
+        """Generate Gemini TTS and wrap its raw 24 kHz mono 16-bit PCM as WAV."""
         language_code = LANGUAGE_CODES[clip.language]
         tts_prompt = (
             f"Generate exactly one finished narration clip.\n"
@@ -305,15 +307,12 @@ class GeminiAudioService:
             f"SCRIPT:\n{clip.script}"
         )
 
+        # Gemini 3.1 TTS currently documents response_format={"type": "audio"}.
+        # The returned payload is raw PCM: 24 kHz, mono, signed 16-bit little-endian.
         interaction = self.client.interactions.create(
             model=TTS_MODEL,
             input=tts_prompt,
-            response_format={
-                "type": "audio",
-                "mime_type": "audio/mp3",
-                "bit_rate": 128000,
-                "delivery": "inline",
-            },
+            response_format={"type": "audio"},
             generation_config={
                 "speech_config": [
                     {
@@ -330,14 +329,24 @@ class GeminiAudioService:
 
         raw = audio.data
         if isinstance(raw, str):
-            raw = base64.b64decode(raw)
-        elif not isinstance(raw, (bytes, bytearray)):
-            raw = base64.b64decode(str(raw))
+            pcm = base64.b64decode(raw)
+        elif isinstance(raw, (bytes, bytearray)):
+            # Current SDK docs expose base64 text, but tolerate raw bytes safely.
+            try:
+                pcm = base64.b64decode(raw, validate=True)
+            except Exception:
+                pcm = bytes(raw)
+        else:
+            pcm = base64.b64decode(str(raw))
 
-        if not raw:
+        if not pcm:
             raise RuntimeError("Gemini returned an empty audio payload.")
 
-        output_path.write_bytes(bytes(raw))
+        with wave.open(str(output_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(pcm)
 
 
 # -----------------------------------------------------------------------------
@@ -625,15 +634,14 @@ def generate_current_draft(tg: TelegramAPI, gemini: GeminiAudioService, chat_id:
         for index, clip in enumerate(draft.clips, start=1):
             tg.send_chat_action(chat_id, "upload_voice")
             lang_code = LANGUAGE_CODES[clip.language]
-            filename = f"clip_{clip.clip_group:02d}_{lang_code}_{index:02d}.mp3"
+            filename = f"clip_{clip.clip_group:02d}_{lang_code}_{index:02d}.wav"
             output_path = temp_path / filename
 
             try:
-                gemini.generate_mp3(clip, output_path)
-                tg.send_audio(
+                gemini.generate_wav(clip, output_path)
+                tg.send_document(
                     chat_id,
                     output_path,
-                    title=f"Clip {clip.clip_group} - {clip.language}",
                     caption=(
                         f"{clip.language} | ~{clip.target_duration_seconds}s | Voice: {clip.voice_name}\n"
                         f"{clip.title}"
