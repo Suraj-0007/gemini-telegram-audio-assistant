@@ -1,0 +1,59 @@
+name: Telegram Gemini Audio Assistant
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_minutes:
+        description: "How long should the Telegram bot stay online?"
+        required: true
+        default: "55"
+        type: choice
+        options:
+          - "15"
+          - "30"
+          - "55"
+          - "120"
+          - "300"
+
+permissions:
+  contents: read
+
+jobs:
+  audio-assistant:
+    runs-on: ubuntu-latest
+    timeout-minutes: 310
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Run Telegram audio assistant
+        shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_USER_ID: ${{ secrets.TELEGRAM_ALLOWED_USER_ID }}
+          TEXT_MODEL: gemini-3.5-flash-lite
+          TTS_MODEL: gemini-3.1-flash-tts-preview
+          MAX_CLIP_SECONDS: "40"
+          MAX_AUDIO_FILES: "6"
+        run: |
+          set -euo pipefail
+          MINUTES='${{ inputs.session_minutes }}'
+          echo "Starting Telegram bot for ${MINUTES} minute(s)."
+          timeout --signal=INT "${MINUTES}m" python -u audio_assistant.py || code=$?
+          code=${code:-0}
+          if [ "$code" -eq 124 ] || [ "$code" -eq 130 ]; then
+            echo "Configured bot session finished normally."
+            exit 0
+          fi
+          exit "$code"
