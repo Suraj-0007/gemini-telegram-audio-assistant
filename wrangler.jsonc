@@ -1,6 +1,24 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "sks-audio-assistant",
+  "$schema": "./node_modules/wrangler/config-schema.json",
+
+  "name": "gemini-telegram-audio-assistant",
   "main": "src/index.js",
-  "compatibility_date": "2026-09-17"
+  "compatibility_date": "2026-09-17",
+
+  "keep_vars": true,
+
+  "secrets": {
+    "required": [
+      "GEMINI_API_KEY",
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_WEBHOOK_SECRET"
+    ]
+  },
+
+  "kv_namespaces": [
+    {
+      "binding": "SESSIONS",
+      "id": "5ecbbdc07190471c9d6074a8d01be760"
+    }
+  ]
 }
