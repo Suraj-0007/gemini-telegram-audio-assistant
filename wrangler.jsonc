@@ -7,6 +7,14 @@
 
   "keep_vars": true,
 
+  "vars": {
+    "MAX_AUDIO_FILES": "6",
+    "MAX_CLIP_SECONDS": "40",
+    "TELEGRAM_ALLOWED_USER_ID": "7075891662",
+    "TEXT_MODEL": "gemini-3.5-flash-lite",
+    "TTS_MODEL": "gemini-3.1-flash-tts-preview"
+  },
+
   "secrets": {
     "required": [
       "GEMINI_API_KEY",
